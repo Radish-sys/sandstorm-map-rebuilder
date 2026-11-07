@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+build/
+dist/
+# extracted maps (the app's default output next to the repo). Not "SMR/": Git on Windows matches ignore patterns
+# case-insensitively, and that line would hide the smr/ package
+/SMR Maps/
+*.spec.bak

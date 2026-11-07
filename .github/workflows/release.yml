@@ -1,0 +1,79 @@
+name: Release
+
+# Push a tag like v0.9 (it must match smr/__init__.py and MENU_VERSION in sdk/smr_menu.py) or run it by hand from the Actions tab.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller==6.22.3
+
+      - name: Read version
+        id: ver
+        shell: bash
+        run: |
+          v=$(python -c "import smr; print(smr.__version__)")
+          mv=$(python -c "import re; print(re.search(r\"MENU_VERSION = '([^']+)'\", open('sdk/smr_menu.py').read()).group(1))")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          b=$(python -c "import smr; print(smr.__build__)")
+          sb=$(python -c "import re; print(re.search(r\"BUILD = '([^']+)'\", open('sdk/rebuild_map.py').read()).group(1))")
+          if [[ "$b" != "$sb" ]]; then
+            echo "::error::sdk/rebuild_map.py BUILD ($sb) does not match smr/__init__.py __build__ ($b)"; exit 1
+          fi
+          if [[ "$mv" != "$v" ]]; then
+            echo "::error::sdk/smr_menu.py MENU_VERSION ($mv) does not match smr/__init__.py version ($v)"; exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$v" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match smr/__init__.py version $v"; exit 1
+          fi
+
+      - name: Build exe
+        run: pyinstaller --noconfirm SandstormMapRebuilder.spec
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "SandstormMapRebuilder-v${{ steps.ver.outputs.version }}"
+          New-Item -ItemType Directory -Path $name | Out-Null
+          Copy-Item dist/SandstormMapRebuilder.exe $name/
+          Copy-Item README.md, LICENSE.md $name/
+          New-Item -ItemType Directory -Path $name/extras | Out-Null
+          Copy-Item sdk/smr_localize_deps.py, sdk/smr_rename_mod.py $name/extras/
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SandstormMapRebuilder-v${{ steps.ver.outputs.version }}
+          path: SandstormMapRebuilder-v${{ steps.ver.outputs.version }}.zip
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SandstormMapRebuilder-v${{ steps.ver.outputs.version }}.zip
+          generate_release_notes: true
+
+      - name: Announce on Discord
+        if: github.ref_type == 'tag' && env.DISCORD_WEBHOOK != ''
+        shell: bash
+        run: |
+          curl -sS -H "Content-Type: application/json" -X POST "$DISCORD_WEBHOOK" \
+            -d "{\"content\": \"Sandstorm Map Rebuilder **v${{ steps.ver.outputs.version }}** released: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}\"}"
